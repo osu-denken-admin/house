@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RIP Network Game</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Cytoscape.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts (Space Mono for Hacker/Tech aesthetic) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    
+    <!-- Tone.js for Generative Sound Effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        mono: ['"Space Mono"', 'monospace'],
+                    },
+                    colors: {
+                        game: {
+                            bg: '#0a0a0c',
+                            panel: 'rgba(15, 15, 20, 0.85)',
+                            border: '#2a2a35',
+                            accent: '#00ffcc',
+                            accentHover: '#00ccaa',
+                            danger: '#ff3366',
+                            text: '#e0e0e0',
+                            muted: '#666677'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #0a0a0c;
+            color: #e0e0e0;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* Cytoscape Container */
+        #cy {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            outline: none;
+        }
+
+        /* UI Overlays */
+        .ui-layer {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none; /* Let clicks pass through empty space */
+        }
+        
+        .ui-panel {
+            pointer-events: auto; /* Enable clicks on panels */
+            background: rgba(15, 15, 20, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid #2a2a35;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Custom Scrollbar for Terminal */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #00ffcc;
+        }
+
+        /* Tool active state */
+        .tool-btn.active {
+            background-color: rgba(0, 255, 204, 0.15);
+            color: #00ffcc;
+            border-color: #00ffcc;
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.2);
+        }
+
+        /* CRT Scanline effect (subtle) */
+        .scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 4px, 3px 100%;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        @keyframes flashText {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .anim-flash { animation: flashText 1s infinite; }
+    </style>
+</head>
+<body class="font-mono text-sm">
+
+    <!-- Network Graph Canvas -->
+    <div id="cy"></div>
+    <div class="scanlines"></div>
+
+    <!-- Top Left: Title & Info -->
+    <div class="ui-layer top-6 left-6 ui-panel p-4 flex flex-col gap-1 w-72">
+        <h1 class="text-xl font-bold text-game-accent tracking-tighter uppercase flex items-center gap-2">
+            <i class="fa-solid fa-satellite-dish"></i> RIP_NET.OS
+        </h1>
+        <p class="text-game-muted text-xs">RIPv2 シミュレーター</p>
+        <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-game-text">
+            <div>モード: <span class="text-white">サンドボックス</span></div>
+            <div>稼働時間: <span id="uiUptime" class="text-game-accent font-bold">0</span>s</div>
+            <div>ノード数: <span id="uiNodeCount">0</span></div>
+            <div>状態: <span id="uiSimStatus" class="text-yellow-400">一時停止</span></div>
+        </div>
+    </div>
+
+    <!-- Top Right: Simulation Controls -->
+    <div class="ui-layer top-6 right-6 flex gap-2">
+        <div class="ui-panel flex p-1">
+            <button id="btnPlayPause" class="w-10 h-10 flex items-center justify-center text-game-text hover:text-game-accent transition-colors rounded" title="再生/一時停止">
+                <i class="fa-solid fa-play"></i>
+            </button>
+            <button id="btnStep" class="w-10 h-10 flex items-center justify-center text-game-text hover:text-game-accent transition-colors rounded" title="ステップ (更新をトリガー)">
+                <i class="fa-solid fa-forward-step"></i>
+            </button>
+            <button id="btnReset" class="w-10 h-10 flex items-center justify-center text-game-danger hover:text-red-400 transition-colors rounded" title="ネットワークをリセット">
+                <i class="fa-solid fa-power-off"></i>
+            </button>
+            <button id="btnMode" class="w-10 h-10 ml-2 border-l border-game-border pl-3 flex items-center justify-center text-purple-400 hover:text-purple-300 transition-colors rounded" title="モード切替">
+                <i class="fa-solid fa-gamepad"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Top Center: Objective Panel (Game Mode) -->
+    <div id="objectivePanel" class="ui-layer top-6 left-1/2 transform -translate-x-1/2 ui-panel p-3 w-[400px] border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.2)]">
+        <div class="text-xs text-purple-400 font-bold mb-1 uppercase tracking-widest flex justify-between">
+            <span id="objLevel">レベル 1</span>
+            <span id="objStatus"><i class="fa-solid fa-spinner fa-spin"></i> 進行中</span>
+        </div>
+        <div id="objDesc" class="text-sm text-white">
+            R1とR2を接続して経路を確立してください。
+        </div>
+    </div>
+
+    <!-- Bottom Center: Toolbox -->
+    <div class="ui-layer bottom-8 left-1/2 transform -translate-x-1/2">
+        <div class="ui-panel p-2 flex gap-2 rounded-full">
+            <button class="tool-btn active w-12 h-12 rounded-full border border-transparent flex items-center justify-center text-game-muted hover:text-game-text transition-all" data-tool="pointer" title="ポインター / 確認">
+                <i class="fa-solid fa-arrow-pointer text-lg"></i>
+            </button>
+            <div class="w-px h-8 bg-game-border my-auto"></div>
+            <button class="tool-btn w-12 h-12 rounded-full border border-transparent flex items-center justify-center text-game-muted hover:text-game-text transition-all" data-tool="addNode" title="ルーター追加">
+                <i class="fa-solid fa-server text-lg"></i>
+            </button>
+            <button class="tool-btn w-12 h-12 rounded-full border border-transparent flex items-center justify-center text-game-muted hover:text-game-text transition-all" data-tool="addEdge" title="ルーター接続">
+                <i class="fa-solid fa-network-wired text-lg"></i>
+            </button>
+            <div class="w-px h-8 bg-game-border my-auto"></div>
+            <button class="tool-btn w-12 h-12 rounded-full border border-transparent flex items-center justify-center text-game-danger hover:text-red-400 transition-all" data-tool="toggleState" title="電源ON/OFF (障害シミュレーション)">
+                <i class="fa-solid fa-bolt-lightning text-lg"></i>
+            </button>
+            <button class="tool-btn w-12 h-12 rounded-full border border-transparent flex items-center justify-center text-game-danger hover:text-red-400 transition-all" data-tool="delete" title="削除">
+                <i class="fa-solid fa-trash text-lg"></i>
+            </button>
+        </div>
+        <div id="toolTip" class="text-center mt-3 text-xs text-game-accent tracking-widest uppercase">
+            ノードを選択して詳細を確認
+        </div>
+    </div>
+
+    <!-- Right Side: Inspector & Routing Table -->
+    <div id="inspectorPanel" class="ui-layer top-24 right-6 w-80 ui-panel flex flex-col hidden transition-opacity duration-300" style="max-height: calc(100vh - 8rem);">
+        <!-- Header -->
+        <div class="p-3 border-b border-game-border bg-black/40 flex justify-between items-center rounded-t-lg">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-microchip text-game-accent"></i>
+                <span id="inspTitle" class="font-bold text-white text-base">R1</span>
+                <span id="inspStatus" class="text-xs px-2 py-0.5 rounded bg-green-900 text-green-400">起動中</span>
+            </div>
+            <button id="btnCloseInspector" class="text-game-muted hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <!-- Node Info -->
+        <div class="p-3 text-xs border-b border-game-border">
+            <div class="flex justify-between mb-1">
+                <span class="text-game-muted">インターフェース:</span>
+                <span id="inspNeighbors" class="text-white">0</span>
+            </div>
+            <div class="flex justify-between">
+                <span class="text-game-muted">最終更新:</span>
+                <span id="inspLastUpdate" class="text-white">なし</span>
+            </div>
+        </div>
+
+        <!-- Routing Table (CLI Style) -->
+        <div class="p-3 flex-1 overflow-y-auto bg-[#050505] rounded-b-lg font-mono">
+            <div class="text-game-accent text-xs mb-2">> show ip route rip</div>
+            <table class="w-full text-left text-xs border-collapse">
+                <thead>
+                    <tr class="text-game-muted border-b border-game-border">
+                        <th class="py-1 font-normal">宛先</th>
+                        <th class="py-1 font-normal">次ホップ</th>
+                        <th class="py-1 font-normal">メトリック</th>
+                        <th class="py-1 font-normal">タイマー</th>
+                    </tr>
+                </thead>
+                <tbody id="routingTableBody">
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+            <div id="emptyTableMsg" class="text-game-muted text-xs mt-4 text-center hidden">テーブルは空です</div>
+        </div>
+    </div>
+
+    <!-- Toast Notification System -->
+    <div id="toastContainer" class="ui-layer top-6 left-1/2 transform -translate-x-1/2 flex flex-col gap-2 items-center pointer-events-none z-50">
+    </div>
+
+    <!-- Level Complete Modal -->
+    <div id="levelCompleteModal" class="ui-layer inset-0 bg-black/80 hidden flex-col items-center justify-center z-50 backdrop-blur-sm">
+        <div class="ui-panel p-8 text-center border-game-accent shadow-[0_0_30px_rgba(0,255,204,0.3)] transform scale-90 transition-transform duration-300" id="modalContent">
+            <h2 class="text-4xl font-bold text-game-accent mb-2">ネットワーク確立</h2>
+            <p id="modalMsg" class="text-game-muted mb-6">目標を達成しました。</p>
+            <button id="btnNextLevel" class="px-6 py-2 bg-game-accent text-black font-bold rounded hover:bg-white transition-colors">
+                次のレベルへ <i class="fa-solid fa-arrow-right ml-2"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. Core Config & Sound Engine (Tone.js)
+        // ==========================================
+        const CONFIG = {
+            RIP: {
+                MAX_METRIC: 16,
+                UPDATE_INTERVAL: 30, // 30 ticks (simulated seconds)
+                TIMEOUT: 180,        // 180 ticks
+                GARBAGE_COLLECTION: 120 // +120 ticks after timeout
+            },
+            SIMULATION: {
+                TICK_MS: 100 // 1 tick = 100ms real time (speed up simulation)
+            }
+        };
+
+        // Sound System Initialization
+        let synth, clickSynth, errorSynth;
+        async function initAudio() {
+            await Tone.start();
+            synth = new Tone.PolySynth(Tone.Synth, {
+                oscillator: { type: 'sine' },
+                envelope: { attack: 0.01, decay: 0.1, sustain: 0.1, release: 0.5 }
+            }).toDestination();
+            synth.volume.value = -15;
+
+            clickSynth = new Tone.Synth({
+                oscillator: { type: 'triangle' },
+                envelope: { attack: 0.01, decay: 0.05, sustain: 0, release: 0.01 }
+            }).toDestination();
+            clickSynth.volume.value = -10;
+
+            errorSynth = new Tone.Synth({
+                oscillator: { type: 'sawtooth' },
+                envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2 }
+            }).toDestination();
+            errorSynth.volume.value = -15;
+        }
+
+        function playSound(type) {
+            if(!synth) return;
+            try {
+                if(type === 'click') clickSynth.triggerAttackRelease("C6", "32n");
+                else if(type === 'addNode') synth.triggerAttackRelease(["C4", "E4", "G4"], "16n");
+                else if(type === 'addEdge') synth.triggerAttackRelease(["F4", "A4"], "16n");
+                else if(type === 'error') errorSynth.triggerAttackRelease("A2", "8n");
+                else if(type === 'update') synth.triggerAttackRelease("C5", "64n");
+                else if(type === 'down') errorSynth.triggerAttackRelease("E2", "4n");
+                else if(type === 'success') {
+                    synth.triggerAttackRelease("C4", "16n", Tone.now());
+                    synth.triggerAttackRelease("E4", "16n", Tone.now() + 0.1);
+                    synth.triggerAttackRelease("G4", "8n", Tone.now() + 0.2);
+                    synth.triggerAttackRelease("C5", "4n", Tone.now() + 0.3);
+                }
+            } catch(e) {} // Ignore if context not resumed
+        }
+
+        // Setup Audio on first user interaction
+        document.body.addEventListener('pointerdown', async () => {
+            if(!synth) await initAudio();
+        }, { once: true });
+
+
+        // ==========================================
+        // 2. UI & Toast Management
+        // ==========================================
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            const bg = type === 'error' ? 'bg-red-900/80 border-red-500' : 'bg-game-panel border-game-accent';
+            const text = type === 'error' ? 'text-red-200' : 'text-game-accent';
+            const icon = type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-info';
+            
+            toast.className = `px-4 py-2 rounded shadow-lg border ${bg} ${text} text-xs font-bold flex items-center gap-2 backdrop-blur-md transition-all duration-300 transform translate-y-[-20px] opacity-0`;
+            toast.innerHTML = `<i class="fa-solid ${icon}"></i> ${message}`;
+            
+            container.appendChild(toast);
+            
+            // Animate in
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-[-20px]', 'opacity-0');
+                toast.classList.add('translate-y-0', 'opacity-100');
+            });
+
+            // Remove after 3s
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-[-20px]', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+            
+            if(type === 'error') playSound('error');
+        }
+
+
+        // ==========================================
+        // 3. Network Data Model (RIP Logic)
+        // ==========================================
+        class NetworkNode {
+            constructor(id) {
+                this.id = id;
+                this.isUp = true;
+                this.routingTable = new Map(); // Dest -> { nextHop, metric, timer, state }
+                this.initSelfRoute();
+            }
+
+            initSelfRoute() {
+                this.routingTable.clear();
+                this.routingTable.set(this.id, { nextHop: this.id, metric: 0, timer: 0, state: 'ACTIVE' });
+            }
+
+            // Create an update packet for a specific neighbor (Implements Split Horizon with Poisoned Reverse)
+            generateUpdateFor(neighborId) {
+                if (!this.isUp) return null;
+                const update = {};
+                for (const [dest, route] of this.routingTable.entries()) {
+                    let advertisedMetric = route.metric;
+                    // Split Horizon with Poisoned Reverse
+                    if (route.nextHop === neighborId && dest !== neighborId) {
+                        advertisedMetric = CONFIG.RIP.MAX_METRIC; // Poison the route
+                    }
+                    update[dest] = advertisedMetric;
+                }
+                return update;
+            }
+
+            // Process incoming RIP update (Bellman-Ford)
+            processUpdate(neighborId, updateTable, currentTick) {
+                if (!this.isUp) return false;
+                let tableChanged = false;
+
+                for (const dest in updateTable) {
+                    const receivedMetric = updateTable[dest];
+                    // Link cost is always 1 in this simple RIP sim
+                    const newMetric = Math.min(receivedMetric + 1, CONFIG.RIP.MAX_METRIC);
+                    
+                    const existingRoute = this.routingTable.get(dest);
+
+                    if (!existingRoute) {
+                        // New route discovery
+                        if (newMetric < CONFIG.RIP.MAX_METRIC) {
+                            this.routingTable.set(dest, { nextHop: neighborId, metric: newMetric, timer: 0, state: 'ACTIVE' });
+                            tableChanged = true;
+                        }
+                    } else {
+                        // Route exists
+                        if (existingRoute.nextHop === neighborId) {
+                            // Update from current next hop (always trust, even if worse)
+                            if (existingRoute.metric !== newMetric) {
+                                existingRoute.metric = newMetric;
+                                existingRoute.timer = 0;
+                                if(newMetric >= CONFIG.RIP.MAX_METRIC) existingRoute.state = 'TIMEOUT';
+                                tableChanged = true;
+                            } else {
+                                // Reset timer if metric is the same and < 16
+                                if(newMetric < CONFIG.RIP.MAX_METRIC) {
+                                    existingRoute.timer = 0;
+                                    existingRoute.state = 'ACTIVE';
+                                }
+                            }
+                        } else if (newMetric < existingRoute.metric) {
+                            // Found a better route through different neighbor
+                            this.routingTable.set(dest, { nextHop: neighborId, metric: newMetric, timer: 0, state: 'ACTIVE' });
+                            tableChanged = true;
+                        }
+                    }
+                }
+                return tableChanged;
+            }
+
+            // Manage timers (Timeout, Garbage Collection)
+            tickTimers() {
+                if (!this.isUp) return false;
+                let changed = false;
+                for (const [dest, route] of this.routingTable.entries()) {
+                    if (dest === this.id) continue; // Don't timeout self
+                    
+                    route.timer += 1;
+
+                    if (route.state === 'ACTIVE' && route.timer >= CONFIG.RIP.TIMEOUT) {
+                        route.metric = CONFIG.RIP.MAX_METRIC;
+                        route.state = 'TIMEOUT';
+                        route.timer = 0; // Reset timer for GC phase
+                        changed = true;
+                    } else if (route.state === 'TIMEOUT' && route.timer >= CONFIG.RIP.GARBAGE_COLLECTION) {
+                        this.routingTable.delete(dest);
+                        changed = true;
+                    }
+                }
+                return changed;
+            }
+        }
+
+
+        // ==========================================
+        // 4. Cytoscape & Game Engine
+        // ==========================================
+        const cy = cytoscape({
+            container: document.getElementById('cy'),
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': '#0f0f14',
+                        'border-width': 2,
+                        'border-color': '#00ffcc',
+                        'label': 'data(id)',
+                        'color': '#fff',
+                        'font-family': '"Space Mono", monospace',
+                        'font-size': '12px',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'width': 36,
+                        'height': 36,
+                        'text-outline-color': '#000',
+                        'text-outline-width': 2,
+                        'shadow-blur': 15,
+                        'shadow-color': '#00ffcc',
+                        'shadow-opacity': 0.5
+                    }
+                },
+                {
+                    selector: 'node.down',
+                    style: {
+                        'border-color': '#ff3366',
+                        'color': '#888',
+                        'shadow-color': '#ff3366',
+                        'shadow-opacity': 0.8
+                    }
+                },
+                {
+                    selector: 'node:selected',
+                    style: {
+                        'background-color': 'rgba(0, 255, 204, 0.2)',
+                        'border-width': 4,
+                        'width': 40,
+                        'height': 40
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 2,
+                        'line-color': '#444455',
+                        'curve-style': 'bezier',
+                    }
+                },
+                {
+                    selector: 'edge.down',
+                    style: {
+                        'line-color': '#ff3366',
+                        'line-style': 'dashed',
+                        'opacity': 0.5
+                    }
+                },
+                {
+                    selector: 'edge.active-tx',
+                    style: {
+                        'line-color': '#00ffcc',
+                        'width': 4,
+                        'shadow-blur': 10,
+                        'shadow-color': '#00ffcc',
+                        'shadow-opacity': 0.8
+                    }
+                }
+            ],
+            layout: { name: 'preset' },
+            userZoomingEnabled: true,
+            userPanningEnabled: true,
+            boxSelectionEnabled: false
+        });
+
+        // --- Game Levels Definition ---
+        const LEVELS = [
+            {
+                id: 1,
+                title: "レベル 1: 基本",
+                desc: "「ルーター接続」ツールを選択し、R1とR2をリンクしてください。その後、RIPの更新を待ちます。",
+                tools: ['pointer', 'addEdge'],
+                setup: (game) => {
+                    const cx = cy.width() / 2;
+                    const cy_h = cy.height() / 2;
+                    game.addRouter(cx - 100, cy_h); // R1
+                    game.addRouter(cx + 100, cy_h); // R2
+                },
+                checkObjective: (game) => {
+                    const r1 = game.nodes.get('R1');
+                    // Check if R1 has a route to R2 with metric < 16
+                    if (r1 && r1.routingTable.has('R2') && r1.routingTable.get('R2').metric < 16) {
+                        return true;
+                    }
+                    return false;
+                }
+            },
+            {
+                id: 2,
+                title: "レベル 2: ホップ数",
+                desc: "R1からR3へ到達できるようにルーターを接続してください。R1のルーティングテーブルを確認し、メトリックが2ホップになるようにします。",
+                tools: ['pointer', 'addEdge'],
+                setup: (game) => {
+                    const cx = cy.width() / 2;
+                    const cy_h = cy.height() / 2;
+                    game.addRouter(cx - 150, cy_h); // R1
+                    game.addRouter(cx, cy_h - 100); // R2
+                    game.addRouter(cx + 150, cy_h); // R3
+                    game.addLink('R1', 'R2'); // Pre-connect partially
+                },
+                checkObjective: (game) => {
+                    const r1 = game.nodes.get('R1');
+                    if (r1 && r1.routingTable.has('R3') && r1.routingTable.get('R3').metric === 2) {
+                        return true;
+                    }
+                    return false;
+                }
+            },
+            {
+                id: 3,
+                title: "レベル 3: 冗長性と障害復旧",
+                desc: "冗長経路が存在します。「電源ON/OFF」ツールでR1とR2間のリンクを切断し、RIPが代替経路を見つけるまで待機してください。",
+                tools: ['pointer', 'toggleState'],
+                setup: (game) => {
+                    const cx = cy.width() / 2;
+                    const cy_h = cy.height() / 2;
+                    game.addRouter(cx - 100, cy_h - 100); // R1
+                    game.addRouter(cx + 100, cy_h - 100); // R2
+                    game.addRouter(cx, cy_h + 100); // R3
+                    game.addLink('R1', 'R2');
+                    game.addLink('R1', 'R3');
+                    game.addLink('R3', 'R2');
+                    // Pre-warm the simulation so routes exist initially
+                    for(let i=0; i<3; i++) game.simulateRIPStep(); 
+                },
+                checkObjective: (game) => {
+                    const r1 = game.nodes.get('R1');
+                    // Edge R1-R2 must be down
+                    const directEdgeDown = cy.getElementById('R1-R2').hasClass('down') || cy.getElementById('R2-R1').hasClass('down');
+                    // Route must exist via R3 with metric 2
+                    if (directEdgeDown && r1 && r1.routingTable.has('R2') && r1.routingTable.get('R2').nextHop === 'R3' && r1.routingTable.get('R2').metric === 2) {
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        ];
+
+        // Game State
+        const Game = {
+            nodes: new Map(), // id -> NetworkNode
+            tickCount: 0,
+            isRunning: false,
+            loopId: null,
+            nodeCounter: 1,
+            selectedNodeId: null,
+            activeTool: 'pointer',
+            sourceNodeForLink: null,
+            
+            mode: 'campaign', // 'campaign' or 'sandbox'
+            currentLevelIdx: 0,
+            levelCompleted: false,
+
+            init() {
+                this.setupEvents();
+                this.loadMode();
+                showToast("システム起動完了。RIPv2を初期化しました。", "info");
+            },
+
+            loadMode() {
+                document.getElementById('uiUptime').textContent = 0;
+                this.tickCount = 0;
+                this.pause();
+                
+                const btnMode = document.getElementById('btnMode');
+                const objPanel = document.getElementById('objectivePanel');
+                
+                if (this.mode === 'sandbox') {
+                    btnMode.innerHTML = '<i class="fa-solid fa-gamepad"></i>';
+                    btnMode.title = "キャンペーンモードに切替";
+                    objPanel.classList.add('hidden');
+                    document.querySelector('.text-white', document.getElementById('uiSimStatus').parentNode.parentNode).textContent = "サンドボックス";
+                    
+                    // Enable all tools
+                    document.querySelectorAll('.tool-btn').forEach(btn => btn.style.display = 'flex');
+                    this.setTool('pointer');
+                    
+                    this.setupDefaultNetwork();
+                } else {
+                    btnMode.innerHTML = '<i class="fa-solid fa-flask"></i>';
+                    btnMode.title = "サンドボックスモードに切替";
+                    objPanel.classList.remove('hidden');
+                    document.querySelector('.text-white', document.getElementById('uiSimStatus').parentNode.parentNode).textContent = "キャンペーン";
+                    
+                    this.loadLevel(this.currentLevelIdx);
+                }
+            },
+
+            loadLevel(idx) {
+                if (idx >= LEVELS.length) {
+                    showToast("全レベルクリア！サンドボックスモードに移行します。", "success");
+                    this.mode = 'sandbox';
+                    this.loadMode();
+                    return;
+                }
+
+                this.levelCompleted = false;
+                cy.elements().remove();
+                this.nodes.clear();
+                this.nodeCounter = 1;
+
+                const level = LEVELS[idx];
+                
+                // Update Objective UI
+                document.getElementById('objLevel').textContent = level.title;
+                document.getElementById('objDesc').textContent = level.desc;
+                const statusIcon = document.getElementById('objStatus');
+                statusIcon.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 進行中';
+                statusIcon.className = "text-yellow-400";
+                
+                // Restrict Tools
+                document.querySelectorAll('.tool-btn').forEach(btn => {
+                    const toolName = btn.dataset.tool;
+                    if (level.tools.includes(toolName) || toolName === 'pointer') {
+                        btn.style.display = 'flex';
+                    } else {
+                        btn.style.display = 'none';
+                    }
+                });
+                this.setTool('pointer');
+
+                level.setup(this);
+                this.updateUITopBar();
+                this.start(); // Auto start simulation in campaign
+            },
+
+            checkCurrentObjective() {
+                if (this.mode !== 'campaign' || this.levelCompleted) return;
+                
+                const level = LEVELS[this.currentLevelIdx];
+                if (level.checkObjective(this)) {
+                    this.levelCompleted = true;
+                    this.pause();
+                    
+                    // UI Update
+                    const statusIcon = document.getElementById('objStatus');
+                    statusIcon.innerHTML = '<i class="fa-solid fa-check"></i> クリア';
+                    statusIcon.className = "text-green-400";
+                    
+                    playSound('success');
+                    
+                    // Show Modal
+                    const modal = document.getElementById('levelCompleteModal');
+                    const modalContent = document.getElementById('modalContent');
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                    setTimeout(() => {
+                        modalContent.classList.remove('scale-90');
+                        modalContent.classList.add('scale-100');
+                    }, 50);
+                }
+            },
+
+            setupDefaultNetwork() {
+                cy.elements().remove();
+                this.nodes.clear();
+                this.nodeCounter = 1;
+
+                const cx = cy.width() / 2;
+                const cy_h = cy.height() / 2;
+                const r = 150;
+                
+                // Add 4 nodes in a diamond
+                const positions = [
+                    {x: cx, y: cy_h - r}, {x: cx + r, y: cy_h},
+                    {x: cx, y: cy_h + r}, {x: cx - r, y: cy_h}
+                ];
+
+                for(let i=0; i<4; i++){
+                    this.addRouter(positions[i].x, positions[i].y);
+                }
+                
+                this.addLink('R1', 'R2');
+                this.addLink('R2', 'R3');
+                this.addLink('R3', 'R4');
+                this.addLink('R4', 'R1');
+            },
+
+            addRouter(x, y) {
+                const id = `R${this.nodeCounter++}`;
+                cy.add({ group: 'nodes', data: { id }, position: { x, y } });
+                this.nodes.set(id, new NetworkNode(id));
+                playSound('addNode');
+                this.updateUITopBar();
+                return id;
+            },
+
+            addLink(source, target) {
+                if (source === target) return;
+                const edgeId = `${source}-${target}`;
+                const edgeIdRev = `${target}-${source}`;
+                if (cy.getElementById(edgeId).length > 0 || cy.getElementById(edgeIdRev).length > 0) return; // Exists
+                
+                cy.add({ group: 'edges', data: { id: edgeId, source, target } });
+                playSound('addEdge');
+            },
+
+            toggleNodeState(id) {
+                const node = this.nodes.get(id);
+                if (!node) return;
+                node.isUp = !node.isUp;
+                
+                const cyNode = cy.getElementById(id);
+                if (node.isUp) {
+                    cyNode.removeClass('down');
+                    // Re-init route
+                    node.initSelfRoute();
+                    playSound('addNode');
+                } else {
+                    cyNode.addClass('down');
+                    // Clear table
+                    node.routingTable.clear();
+                    playSound('down');
+                }
+                
+                // Immediately trigger updates to neighbors (Triggered Update approximation)
+                if(this.isRunning) this.simulateRIPStep(); 
+                if (this.selectedNodeId === id) this.updateInspector();
+            },
+
+            toggleEdgeState(edgeId) {
+                const edge = cy.getElementById(edgeId);
+                if(edge.hasClass('down')) {
+                    edge.removeClass('down');
+                    playSound('addEdge');
+                } else {
+                    edge.addClass('down');
+                    playSound('down');
+                    // Fast topology change requires immediate step ideally
+                    if(this.isRunning) this.simulateRIPStep();
+                }
+            },
+
+            deleteNode(id) {
+                cy.getElementById(id).remove();
+                this.nodes.delete(id);
+                playSound('error');
+                if(this.selectedNodeId === id) {
+                    this.selectedNodeId = null;
+                    document.getElementById('inspectorPanel').classList.add('hidden');
+                }
+                this.updateUITopBar();
+            },
+
+            deleteEdge(id) {
+                cy.getElementById(id).remove();
+                playSound('error');
+            },
+
+            // --- Simulation Logic ---
+
+            start() {
+                if (this.isRunning) return;
+                this.isRunning = true;
+                document.getElementById('btnPlayPause').innerHTML = '<i class="fa-solid fa-pause"></i>';
+                document.getElementById('uiSimStatus').textContent = '実行中';
+                document.getElementById('uiSimStatus').className = 'text-green-400 anim-flash';
+                this.loopId = setInterval(() => this.tick(), CONFIG.SIMULATION.TICK_MS);
+            },
+
+            pause() {
+                if (!this.isRunning) return;
+                this.isRunning = false;
+                document.getElementById('btnPlayPause').innerHTML = '<i class="fa-solid fa-play"></i>';
+                document.getElementById('uiSimStatus').textContent = '一時停止';
+                document.getElementById('uiSimStatus').className = 'text-yellow-400';
+                clearInterval(this.loopId);
+            },
+
+            tick() {
+                this.tickCount++;
+                document.getElementById('uiUptime').textContent = this.tickCount;
+
+                let stateChanged = false;
+
+                // 1. Tick timers
+                for (const node of this.nodes.values()) {
+                    if (node.tickTimers()) stateChanged = true;
+                }
+
+                // 2. Periodic Updates
+                if (this.tickCount % CONFIG.RIP.UPDATE_INTERVAL === 0) {
+                    this.simulateRIPStep();
+                    stateChanged = true;
+                }
+
+                if (stateChanged && this.selectedNodeId) {
+                    this.updateInspector();
+                }
+
+                this.checkCurrentObjective();
+            },
+
+            simulateRIPStep() {
+                // Simulate one round of update exchanges
+                const cyEdges = cy.edges(':not(.down)');
+                const pendingUpdates = [];
+
+                // Phase 1: Generate all updates based on CURRENT state (synchronous snapshot)
+                cyEdges.forEach(edge => {
+                    const sId = edge.data('source');
+                    const tId = edge.data('target');
+                    const nodeS = this.nodes.get(sId);
+                    const nodeT = this.nodes.get(tId);
+
+                    if (nodeS && nodeS.isUp && nodeT && nodeT.isUp) {
+                        pendingUpdates.push({ to: tId, from: sId, data: nodeS.generateUpdateFor(tId), edge });
+                        pendingUpdates.push({ to: sId, from: tId, data: nodeT.generateUpdateFor(sId), edge });
+                    }
+                });
+
+                let anyTableChanged = false;
+                const animatedEdges = new Set();
+
+                // Phase 2: Apply updates
+                pendingUpdates.forEach(update => {
+                    const targetNode = this.nodes.get(update.to);
+                    if (targetNode.processUpdate(update.from, update.data, this.tickCount)) {
+                        anyTableChanged = true;
+                    }
+                    animatedEdges.add(update.edge);
+                });
+
+                // Visual Feedback
+                if (animatedEdges.size > 0) {
+                    playSound('update');
+                    animatedEdges.forEach(edge => {
+                        edge.addClass('active-tx');
+                        setTimeout(() => edge.removeClass('active-tx'), 150);
+                    });
+                }
+
+                if (anyTableChanged && this.selectedNodeId) {
+                    this.updateInspector();
+                }
+                
+                if (anyTableChanged) {
+                    this.checkCurrentObjective();
+                }
+            },
+
+            // --- UI Integration ---
+            
+            updateUITopBar() {
+                document.getElementById('uiNodeCount').textContent = this.nodes.size;
+            },
+
+            updateInspector() {
+                const panel = document.getElementById('inspectorPanel');
+                if (!this.selectedNodeId) {
+                    panel.classList.add('hidden');
+                    return;
+                }
+                
+                const node = this.nodes.get(this.selectedNodeId);
+                const cyNode = cy.getElementById(this.selectedNodeId);
+                
+                if(!node) return;
+
+                panel.classList.remove('hidden');
+                document.getElementById('inspTitle').textContent = node.id;
+                
+                const statusBadge = document.getElementById('inspStatus');
+                if (node.isUp) {
+                    statusBadge.textContent = '起動中';
+                    statusBadge.className = 'text-xs px-2 py-0.5 rounded bg-green-900/50 text-green-400 border border-green-700';
+                } else {
+                    statusBadge.textContent = '停止中';
+                    statusBadge.className = 'text-xs px-2 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-700';
+                }
+
+                // Count active interfaces (edges connected to this node that are not down)
+                const activeEdges = cyNode.connectedEdges(':not(.down)').length;
+                document.getElementById('inspNeighbors').textContent = activeEdges;
+
+                const tbody = document.getElementById('routingTableBody');
+                tbody.innerHTML = '';
+
+                if (node.routingTable.size === 0) {
+                    document.getElementById('emptyTableMsg').classList.remove('hidden');
+                } else {
+                    document.getElementById('emptyTableMsg').classList.add('hidden');
+                    
+                    // Sort destinations
+                    const routes = Array.from(node.routingTable.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                    
+                    routes.forEach(([dest, route]) => {
+                        const tr = document.createElement('tr');
+                        tr.className = "border-b border-game-border/50 hover:bg-white/5 transition-colors";
+                        
+                        let metClass = "text-game-text";
+                        let metText = route.metric;
+                        if (route.metric >= CONFIG.RIP.MAX_METRIC) {
+                            metClass = "text-game-danger font-bold";
+                            metText = "16 (到達不能)";
+                        }
+
+                        let timerColor = route.state === 'ACTIVE' ? 'text-game-muted' : 'text-game-danger';
+
+                        tr.innerHTML = `
+                            <td class="py-1.5 text-blue-300 font-bold">${dest}</td>
+                            <td class="py-1.5 text-game-text">${route.nextHop}</td>
+                            <td class="py-1.5 ${metClass}">${metText}</td>
+                            <td class="py-1.5 ${timerColor}">${route.timer}s</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                }
+            },
+
+            setTool(toolName) {
+                this.activeTool = toolName;
+                document.querySelectorAll('.tool-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.tool === toolName);
+                });
+
+                // Reset link state
+                this.sourceNodeForLink = null;
+                cy.nodes().removeClass('bg-yellow-500'); // clear selection highlight style if we had one
+
+                const tooltips = {
+                    'pointer': 'ノードを選択して詳細を確認',
+                    'addNode': '空きスペースをクリックしてルーターを配置',
+                    'addEdge': '2つのルーターをクリックして接続',
+                    'toggleState': 'ノードまたはリンクをクリックして電源を切替',
+                    'delete': 'ノードまたはリンクをクリックして削除'
+                };
+                document.getElementById('toolTip').textContent = tooltips[toolName];
+                playSound('click');
+            },
+
+            setupEvents() {
+                // Toolbar
+                document.querySelectorAll('.tool-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => this.setTool(e.currentTarget.dataset.tool));
+                });
+
+                // Simulation Controls
+                document.getElementById('btnPlayPause').addEventListener('click', () => {
+                    playSound('click');
+                    this.isRunning ? this.pause() : this.start();
+                });
+                
+                document.getElementById('btnStep').addEventListener('click', () => {
+                    playSound('click');
+                    this.simulateRIPStep();
+                });
+                
+                document.getElementById('btnReset').addEventListener('click', () => {
+                    playSound('error');
+                    if (this.mode === 'sandbox') {
+                        this.tickCount = 0;
+                        this.setupDefaultNetwork();
+                    } else {
+                        this.loadLevel(this.currentLevelIdx);
+                    }
+                });
+
+                document.getElementById('btnMode').addEventListener('click', () => {
+                    playSound('click');
+                    this.mode = this.mode === 'sandbox' ? 'campaign' : 'sandbox';
+                    this.loadMode();
+                });
+
+                document.getElementById('btnNextLevel').addEventListener('click', () => {
+                    playSound('click');
+                    const modal = document.getElementById('levelCompleteModal');
+                    const modalContent = document.getElementById('modalContent');
+                    modalContent.classList.remove('scale-100');
+                    modalContent.classList.add('scale-90');
+                    setTimeout(() => {
+                        modal.classList.add('hidden');
+                        modal.classList.remove('flex');
+                        this.currentLevelIdx++;
+                        this.loadLevel(this.currentLevelIdx);
+                    }, 300);
+                });
+
+                document.getElementById('btnCloseInspector').addEventListener('click', () => {
+                    this.selectedNodeId = null;
+                    cy.$(':selected').unselect();
+                    this.updateInspector();
+                    playSound('click');
+                });
+
+                // Cytoscape Interactions based on Tool
+                cy.on('tap', (evt) => {
+                    const target = evt.target;
+                    const isNode = target !== cy && target.isNode();
+                    const isEdge = target !== cy && target.isEdge();
+
+                    switch(this.activeTool) {
+                        case 'pointer':
+                            if (isNode) {
+                                this.selectedNodeId = target.id();
+                                this.updateInspector();
+                                playSound('click');
+                            } else {
+                                this.selectedNodeId = null;
+                                this.updateInspector();
+                            }
+                            break;
+                            
+                        case 'addNode':
+                            if (target === cy) {
+                                this.addRouter(evt.position.x, evt.position.y);
+                            } else {
+                                showToast("その場所には配置できません。", "error");
+                            }
+                            break;
+
+                        case 'addEdge':
+                            if (isNode) {
+                                if (!this.sourceNodeForLink) {
+                                    this.sourceNodeForLink = target.id();
+                                    showToast(`${target.id()} の接続先を選択してください`);
+                                    playSound('click');
+                                } else {
+                                    this.addLink(this.sourceNodeForLink, target.id());
+                                    this.sourceNodeForLink = null;
+                                }
+                            } else if (target === cy) {
+                                this.sourceNodeForLink = null; // cancel
+                            }
+                            break;
+
+                        case 'toggleState':
+                            if (isNode) this.toggleNodeState(target.id());
+                            if (isEdge) this.toggleEdgeState(target.id());
+                            break;
+
+                        case 'delete':
+                            if (isNode) this.deleteNode(target.id());
+                            if (isEdge) this.deleteEdge(target.id());
+                            break;
+                    }
+                });
+            }
+        };
+
+        // Boot
+        window.addEventListener('DOMContentLoaded', () => {
+            Game.init();
+        });
+
+    </script>
+</body>
+</html>
